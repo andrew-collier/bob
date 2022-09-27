@@ -1,0 +1,95 @@
+.TH BOB 1 2022-09-27 GN.TH BOB 1 2022-09-27 GNU
+
+.SH NAME
+bob \- Bob optimizes Bill, and Bill invoices lists of ledgers
+
+.SH SYNOPSIS
+.B bob
+[\fIOPTION\fR]...
+
+.SH DESCRIPTION
+.B bob
+is a wrapper script for managing the schedule of units that are invoiced for multiple months and calls bill, which is a program that generates invoices for the units passed to it.
+
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+displays this help information
+.TP
+.BR \-v ", " \-\-verbose
+use verbose output
+.TP
+.BR \-l ", " \-\-list-batch
+lists the current batch of units due to be invoiced for the month
+.TP
+.BR \-L ", " \-\-list-all
+lists the entire schedule
+.TP
+.BR \-u ", " \-\-update
+update bob with new reports
+.TP
+.BR \-m ", " \-\-make
+create invoices for the current batch and update the schedule
+.TP
+.BR \-t ", " \-\-test
+used with the --make option; will output invoices without updating the schedule. Useful for previewing the output as a "dry run"
+.TP
+.BR \-f ", " \-\-force
+used with the --remove-account option; remove an account without prompting for confirmation. Not recommended.
+.TP
+.BR \-p ", " \-\-set-period [\fImonths\fR]
+used with the --add-account or --edit-account options; specifies how many months to invoice for each time. Only values 3, 6 and 12 qualify for discounts.
+.TP
+.BR \-d ", " \-\-set-delivery-method [\fImethod\fR]
+used with the --add-account or --edit-account options; specifies the delivery method of the invoice. Valid arguments are "e", "m", "b", "email", "mail", or "both".
+.TP
+.BR \-D ", " \-\-set-delivery-advance [\fImonths\fR]
+used with the --add-account or --edit-account options; specifies the number of months in advance to process the invoice. Rarely used.
+.TP
+.BR \-a ", " \-\-add-account [\fIunit\fR]
+add an account to the schedule. Requires both the -p and -d options.
+.TP
+.BR \-e ", " \-\-edit-account [\fIunit\fR]
+edit an account in the schedule. Requires an option to edit, such as -p or -d.
+.TP
+.BR \-r ", " \-\-remove-account [\fIunit\fR]
+remove an account in the schedule
+
+.SH EXAMPLES
+
+.SS Processing the current batch of invoices
+The current batch of invoices can be processed with one command, however it is a good idea to verify the list of units in the batch and do a dry run before hand, as doing so will update the schedule irreversebily.
+
+.TP 
+.B bob -l
+will display the current batch of invoices for the month
+.TP
+.B bob -tm
+will create batch invoices without updating the schedule
+.TP
+.B bob -m
+will create batch invoices and update the schedule
+
+.SS Adding an account
+Add a unit to the schedule by using the -a option. This option requires a \fIunit\fR argument, as well as specifications for the period \fImonths\fR and delivery \fImethod\fR.
+.TP
+.B bob -a 1 -p 3 -d e
+will add unit #001 to the schedule, to be emailed a bill every 3 months.
+
+.SS Editing an account
+Edit an account by using the -e option, specifying a \fIunit\fR to edit and a parameter to edit.
+.TP
+.B bob -e 1 -p6
+will change the number of months to bill unit #001 to 6
+
+.SS Removing an account
+Remove an account by using the -r option and specifying a \fIunit\fR to remove.
+.TP
+.B bob -r 1
+will remove unit #001 from the schedule
+
+.SS Tab Completion
+Tab completions have not yet been implemented. Sorry.
+
+.SH AUTHOR
+Andrew Collier

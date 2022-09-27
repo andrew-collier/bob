@@ -1,0 +1,484 @@
+#!/bin/zsh
+
+# REPORTS INPUT DIRECTORY
+inputDir="$HOME/invoices/reports"
+
+# OUTPUT DIRECTORY
+outputDir="$HOME/invoices"
+
+# SOURCES
+reportsDir=$HOME/.local/share/bob/reports
+groffDir=$HOME/.local/share/bob/groff
+tmpSchedulePath="${reportsDir}/schedule.tmp"
+schedulePath="${reportsDir}/schedule.txt"
+directoryPath="${reportsDir}/Bronson Mini Storage - Directory.txt"
+prepayPath="${reportsDir}/Bronson Mini Storage - Prepaid Rent Liabilities"
+
+
+# OPTIONS
+zparseopts -E -D -F -A opts \
+	e+:=eArg -edit-account+:=eArg \
+	a+:=aArg -add-account+:=aArg \
+	r+:=rArg -remove-account+:=rArg \
+	p+:=pArg -set-period+:=pArg \
+	d+:=dArg -set-delivery+:=dArg \
+	D+:=DArg -set-delivery-advance+:=DArg \
+	n+:=nArg -set-note+:=nArg \
+	L=flag -list-all=flag \
+	l=flag -list-batch=flag \
+	f=flag -force=flag \
+	m=flag -make \
+	t=flag -test \
+	u=flag -update=flag \
+	v=flag -verbose=flag \
+	h=flag -help=flag
+
+# IMPORT ARGV
+args=($argv)
+
+# COLUMNATE
+columnate() {
+	column -t -s',' -N"Unit,Name,Period,Delivery,Last Sent,Send Next,Advance,TenantID,Note"
+}
+
+
+# UPDATE
+update()
+{
+	prepayReport="Bronson Mini Storage - Prepaid Rent Liabilities.txt"
+	directoryReport="Bronson Mini Storage - Directory.txt"
+
+	## check if reports are present
+	#[[ $(ls $inputDir | wc -l) -eq 0 ]] && echo "No reports were found in $inputDir. Please export the \"Directory\" and \"Prepaid Rent Liabilities\" reports from SiteLink as .txt files into the $inputDir folder with the default filenames \"$directoryReport\" and \"$prepayReport\", respectively." && exit 1
+	#[[ -z $(grep $directoryReport $inputDir) ]] && echo "Unable to source $inputDir/$directoryReport. Please export the \"Directory\" report from SiteLink as a .txt file into the $inputDir folder with the default filename \"$directoryReport\"." && exit 1
+	#[[ -z $(grep $prepayReport $inputDir) ]] && echo "Unable to source $inputDir/$prepayReport. Please export the \"Prepaid Rent Liabilities\" report from SiteLink as a .txt file into the $inputDir folder with the default filename \"$prepayReport\"." && exit 1
+
+	#mv -f $inputDir/* $reportsDir	
+	#dos2unix $directoryPath $prepayPath 2> /dev/null && echo "Successfully converted SiteLink Reports' line ends from DOS to unix" || echo "Unable to update reports"
+
+	# validate schedule
+	scheduleUnits=($(awk -F, '{print $1}' $schedulePath))
+	for unit in $scheduleUnits
+	do
+		# check if unit is rented
+		if [[ -z $(awk -F'\t' -v unit=$unit '$1 == unit {print $1}' $directoryPath) ]]
+		then
+			echo "Unit $unit in the schedule is not longer a current tenant. Removing..."
+			bob --force --remove $unit
+		fi
+
+		# check for updated payment
+		paidthru="$(awk -F'\t' -v unit="$unit" '$1 == unit {print $246}' "${directoryPath}")"
+
+		# Get the number of months in advance to send
+		advLen="$(awk -F, -v unit="$unit" '$1 == unit {print $7}' $schedulePath)"
+
+		# Generate the date to send next invoice
+		sendnext="$(date -d "${paidthru} +$advLen month" +"%m/%Y")"
+
+		# Update the record
+		awk 'BEGIN{FS=OFS=","} {if($1==unit) {$6=var}; print $0;}' unit="$unit" var="$sendnext"  $schedulePath > $tmpSchedulePath && mv -f $tmpSchedulePath $schedulePath
+	done
+}
+
+
+# LIST
+list_batch() # list current batch
+{
+	date=$(date '+%m/%Y')
+	# testing
+	#date="10/2022"
+	if [[ $args ]]
+	then
+		awk -v arg="$args" -v snd_nxt="$date" 'BEGIN \
+			{ FS = OFS = "," } \
+			{ split(arg,a," ") }\
+			{ for(i in a) if($1 == a[i] && $6==snd_nxt) print $0; }' $schedulePath | \
+		sort | columnate
+	else
+		awk -v month="$date" 'BEGIN \
+			{ FS = OFS = ","} \
+			{ if($6==month) print $0}' $schedulePath | \
+		sort | columnate
+	fi
+}
+
+
+list() # list entire schedule
+{
+	if [[ $args ]]
+	then
+		awk -v arg="$args" 'BEGIN \
+		{ FS = OFS = "," } \
+		{ split(arg,a," ") }\
+		{ for(i in a) if($1 == a[i]) print $0; }' $schedulePath | \
+		sort | columnate
+	else
+		cat $schedulePath | sort | columnate
+	fi
+}
+
+
+add_account()
+{
+	# check for incompatable options
+	[[ $rArg ]] && echo "Modes \"add\" and \"remove\" are incompatible with each other. Please run one at a time." && exit 0
+	[[ $eArg ]] && echo "Modes \"add\" and \"edit\" are incompatible with each other. Please run one at a time." && exit 0
+	
+
+	# check for required arguments
+	[[ -z $pArg ]] && echo Missing --set-period-argument && exit 1
+	[[ -z $dArg ]] && echo Missing --set-delivery-method argument && exit 1
+	[[ ${#aArg} -ne ${#pArg} &&  ${#pArg} -ne ${#dArg} ]] && echo Argument count is inconsistant. && exit 1
+
+	# check for optional arguments
+	[[ -n $DArg && ${#aArg} -gt 2 && ${#DArg} -ne ${#aArg} ]] && echo "If you are going to --set-delivery-advance, it must have the same number of arguments as the others" && exit 1
+	[[ -n $nArg && ${#aArg} -gt 2 && ${#nArg} -ne ${#aArg} ]] && echo "If you are going to --set-note, it must have the same number of arguments as the others" && exit 1
+
+	# filter out flags
+	aArg=("${(@)aArg:#-a}") 
+	pArg=("${(@)pArg:#-p}")
+	dArg=("${(@)dArg:#-d}")
+	DArg=("${(@)DArg:#-D}")
+	nArg=("${(@)nArg:#-n}")
+	aArg=("${(@)aArg:#--add-account}") 
+	pArg=("${(@)pArg:#--set-period}")
+	dArg=("${(@)dArg:#--set-delivery-method}")
+	DArg=("${(@)DArg:#--set-delivery-advance}") nArg=("${(@)nArg:#--set-note}")
+
+	# check period values
+	case $pArg in
+		1) echo "Please use SiteLink's built in invoicing for single months." && exit 1;;
+		2) [[ $flag_verbose ]] && echo "Note that only prepays of 3, 6, or 12 months qualify for a discount." && break;;
+		3|6|12) ;;
+		*) echo $pArg is not a valid billing period. exit 1 ;;
+	esac
+
+	# check delivery values
+	case $dArg in
+		"m") dArg="mail";;
+		"e") dArg="email";&
+		"b") dArg="both";&
+		"email"|"both")
+			if [[ -z $(awk -v unit="$eArg" 'BEGIN { FS = "\t"} { if($1==unit) print $46}' $directoryPath | head -n 1) ]]
+			then
+				dArg="mail"
+				echo "No email address on file for this tenant. Reverting delivery method to \"mail\"."
+			fi;;
+		"mail");;
+		0|"none"|"n"|"disable"|"d") dArg="none";;
+		*) echo Delivery method "$delivery" is invalid. Valid options are mail, email, or both. && exit 1;;
+	esac
+	
+	# check and normalize delivery advance values
+	case $DArg in
+		"none"|"n") DArg=0;;
+		*) [[ $DArg ]] && [[ $DArg -lt 0 || $DArg -gt 12 ]] && echo "Value for delivery advance is out of range." && exit 1;;
+	esac
+
+	# validate unit
+	unitnum="$(awk -F'\t' -v unit="$aArg" '$1 == unit {print $1}' "${directoryPath}")"
+	[[ -z $unitnum ]] && echo "Unit $aArg is either unrented or does not exist." && exit 1
+
+	# Source data
+	lastname="$(awk -F'\t' -v unit="$unitnum" '$1 == unit {print $12}' "${directoryPath}")"
+	company="$(awk -F'\t' -v unit="$unitnum" '$1 == unit {print $13}' "${directoryPath}")"
+	paidthru="$(awk -F'\t' -v unit="$unitnum" '$1 == unit {print $246}' "${directoryPath}")"
+
+	# parse delivery advance
+	if [[ $DArg ]]
+	then
+		# get the paid thru date of the account
+		paidthru="$(awk -F'\t' -v unit="$unit" '$1 == unit {print $246}' "${directoryPath}")"
+
+	else
+		# make delivery advance option default to 0 if not specified
+		DArg=0
+	fi
+	
+	# set "Send Next" date based on how many months in advance of the due date to send
+	sendnext="$(date -d "${paidthru} $DArg month ago" +"%m/%Y")"
+
+	# Tenant ID
+	tenantid="$(awk -F'\t' -v unit="$aArg" '$1 == unit {print $4}' "${directoryPath}")"
+	[[ $company ]] && name="$company" || name="$lastname"
+
+	# check if record already present in schedule
+	if [[ "$(awk -F, -v unit="$unitnum" '$1 == unit {print $1}' $schedulePath)" ]]
+	then
+		# exit if record exists
+		if [[ $flag_verbose ]]
+		then
+			printf "%s\n\n" "Unit is already in the schedule here:"
+			bob -L $unitnum
+		else
+			echo "Unit already exists in the schedule."
+		fi
+		exit 1
+	else
+
+		# generate record
+		output=$(printf "%s,%s,%s,%s,%s,%s,%s,%s,%s\n" "$unitnum" "$name" "$pArg" "$dArg" "" "$sendnext" "$DArg" "$tenantid" "$nArg")
+		echo $output >> "$schedulePath"
+
+		# confimation message
+		[[ $flag_verbose ]] && printf "%s\n\n" "Record successfully created." && bob -L $unitnum
+		exit 0
+	fi
+}
+
+
+# REMOVE ACCOUNT
+remove_account()
+{
+	# check for incompatable options
+	[[ $aArg ]] && echo "Modes \"add\" and \"remove\" are incompatible with each other. Please run one at a time." && exit 0
+	[[ $eArg ]] && echo "Modes \"edit\" and \"remove\" are incompatible with each other. Please run one at a time." && exit 0
+	rArg=("${(@)rArg:#-r}") 
+	rArg=("${(@)rArg:#--remove-account}") 
+	validunits=0
+
+	for arg in ${rArg[@]}
+	do
+		match+=("$(awk -F, -v pat="$arg" '$1 == pat {print $1}' $schedulePath)")
+		if [[ -z "$(bob -L $arg)" ]]
+		then
+			[[ $flag_verbose ]] && echo "Unit $arg was not found in the schedule"
+		else
+			((validunits++))
+		fi
+	done
+
+	# check if there were any units found
+	if [[ $validunits -eq 0 ]]
+	then
+		[[ $flag_verbose ]] && echo "None of the units specified for removal were found in the schedule."
+		exit 1
+	fi
+	
+	# confirmation
+	if [[ $flag_verbose ]]
+	then
+		bob -L ${rArg[@]}
+		[[ ${#rArg} -gt 1 ]] &&
+			printf "\n%s\n" "Are you sure you want to remove these accounts?"||
+			printf "\n%s\n" "Are you sure you want to remove this account?"
+	fi
+
+	if [[ -z $flag_force ]]
+	then
+		printf "%s" "Type YES to confirm removal: "
+		read confirm
+		if [[ $confirm != "YES" ]]
+		then
+			[[ $flag_verbose ]] && printf "\n%s\n" "Removal was aborted."
+			exit 0
+		fi
+	fi
+
+	# remove records
+	for x in ${match[@]}
+	do
+		sed -i '/^'$x'/d' $schedulePath
+		[[ $flag_verbose ]] && printf "\n%s\n" "Successfully removed $x"
+
+	done
+
+	# remove empty lines, if any
+	sed -i '/^$/d' $schedulePath
+
+	exit 0
+}
+
+
+# EDIT
+edit_account()
+{	
+	# Check conflicting modes
+	[[ $aArg ]] && echo "Modes \"add\" and \"edit\" are incompatible with each other. Please run one at a time." && exit 0
+	[[ $rArg ]] && echo "Modes \"edit\" and \"remove\" are incompatible with each other. Please run one at a time." && exit 0
+
+
+	# filter out flags
+	eArg=("${(@)eArg:#-e}") 
+	pArg=("${(@)pArg:#-p}")
+	dArg=("${(@)dArg:#-d}")
+	DArg=("${(@)DArg:#-D}")
+	nArg=("${(@)nArg:#-n}")
+	eArg=("${(@)eArg:#--edit-account}") 
+	pArg=("${(@)pArg:#--set-period}")
+	dArg=("${(@)dArg:#--set-delivery-method}")
+	DArg=("${(@)DArg:#--set-delivery-advance}")
+	nArg=("${(@)nArg:#--set-note}")
+	
+	# check if any args were passed
+	[[ -z $pArg && -z $dArg && -z $DArg && -z $nArg ]] && echo "No account parameters were specified" && exit 1
+	
+	# check period values
+	case $pArg in
+		3|6|12) ;;
+		*) [[ $pArg ]] && echo "$pArg is an invalid period length." && exit 1 ;;
+	esac
+	
+	# check delivery values
+	case $dArg in
+		"m") dArg="mail";;
+		"e") dArg="email";&
+		"b") dArg="both";&
+		"e"|"b"|"email"|"both")
+			if [[ -z $(awk -v unit="$eArg" 'BEGIN { FS = "\t"} { if($1==unit) print $46}' $directoryPath | head -n 1) ]]
+			then
+				dArg="mail"
+				echo "No email address on file for this tenant. Reverting delivery method to \"mail\"."
+			fi ;;
+		"mail") ;;
+		0|"none"|"n"|"disable"|"d") dArg="none";;
+		*)
+			[[ $dArg ]] && echo "Delivery method "$delivery" is invalid. Valid options are mail, email, or both." && exit 1 ;;
+	esac
+
+	# check and normalize delivery advance values
+	case $DArg in
+		"none"|"n") DArg=0;;
+		*) [[ $DArg ]] && [[ $DArg -lt 0 || $DArg -gt 12 ]] && echo "Value for delivery advance is out of range." && exit 1;;
+	esac
+
+	# Get the literal unit name from the directory
+	unit="$(awk -F, -v pat="$eArg" '$1 == pat {print $1}' $schedulePath)"
+
+	# Attempt to update the record
+	if [[ -z "$unit" ]]
+	then
+		# exit if not found in the directory
+		[[ $flag_verbose ]] && echo "Unit $unit was not found in the schedule"
+		exit 1
+	else
+		# update period
+		[[ $pArg ]] && awk 'BEGIN{FS=OFS=","} {if($1==unit) {$3=var}; print $0;}' unit="$unit" var="$pArg"  $schedulePath > $tmpSchedulePath && mv -f $tmpSchedulePath $schedulePath
+
+		# update delivery
+		[[ $dArg ]] && awk 'BEGIN{FS=OFS=","} {if($1==unit) {$4=var}; print $0;}' unit="$unit" var="$dArg"  $schedulePath > $tmpSchedulePath && mv -f $tmpSchedulePath $schedulePath
+
+		# update delivery advance
+		if [[ $DArg ]]
+		then
+			# get the paid thru date of the account
+			paidthru="$(awk -F'\t' -v unit="$unit" '$1 == unit {print $246}' "${directoryPath}")"
+
+			# set "Send Next" date based on how many months in advance of the due date to send
+			sendnext="$(date -d "${paidthru} $DArg month ago" +"%m/%Y")"
+
+			# update the record
+			awk 'BEGIN{FS=OFS=","} {if($1==unit) {$7=var}; print $0;}' unit="$unit" var="$DArg"  $schedulePath > $tmpSchedulePath && mv -f $tmpSchedulePath $schedulePath
+			awk 'BEGIN{FS=OFS=","} {if($1==unit) {$6=var}; print $0;}' unit="$unit" var="$sendnext"  $schedulePath > $tmpSchedulePath && mv -f $tmpSchedulePath $schedulePath
+		fi
+
+		# note
+		[[ $nArg ]] && awk 'BEGIN{FS=OFS=","} {if($1==unit) {$9=var}; print $0;}' unit="$unit" var="$nArg"  $schedulePath > $tmpSchedulePath && mv -f $tmpSchedulePath $schedulePath
+	fi
+}
+
+
+# MAKE INVOICES
+make_invoices()
+{
+	date=$(date '+%m/%Y')
+	#testing
+	#date="10/2022"
+	batchUnits=($(awk -v month="$date" 'BEGIN { FS = OFS = ","} { if($6==month) print $1}' $schedulePath))
+
+	# generate groff documents
+	bill ${batchUnits[@]}
+
+	for unit in ${batchUnits[@]}
+	do
+	done
+
+	outputDir="$outputDir/$(date '+%Y')/$(date '+%m')_$(date '+%B')"
+
+	# compile each groff document
+	for file in $(ls ${XDG_DATA_HOME:-$HOME/.local/share}/bob/groff)
+	do
+		# make pdf filename
+		pdffilename=$(echo $file|sed 's/\.groff/\.pdf/')
+
+		# get delivery method
+		fileTenantID=$(echo $file | sed 's/.*\([0-9]\{5\}\)_.*/\1/')
+
+		# get email address
+		dMethod=$(awk -v tid="$fileTenantID" 'BEGIN { FS = OFS = ","} { if($8==tid) print $4}' $schedulePath | head -n 1)
+		email=$(awk -v tid="$fileTenantID" 'BEGIN { FS = "\t"} { if($4==tid) print $46}' $directoryPath | head -n 1)
+		note="$(awk -v tid="$fileTenantID" 'BEGIN { FS = OFS = ","} { if($8==tid) print $9}' $schedulePath | head -n 1)"
+		
+		# compile pdfs into their respective folders
+		case $dMethod in
+			"mail")
+				mkdir -p "$outputDir/mail" 2>/dev/null
+				groff -E -mom -t -Tpdf $groffDir/$file > "$outputDir/mail/$pdffilename"
+				;;
+			"email"|"both")
+				mkdir -p "$outputDir/email" 2>/dev/null
+				groff -E -mom -t -Tpdf $groffDir/$file > "$outputDir/email/$pdffilename"
+				touch "$outputDir/notes.txt"
+				echo "$email\t$pdffilename\t$note" >> "$outputDir/notes.txt"
+				[[ $dMethod = "both" ]] && cp "$outputDir/email/$pdffilename" "$outputDir/mail"
+				;;
+		esac
+	done
+
+	#clean up groff directory
+	rm -f $groffDir/*
+	
+	# update schedule
+	for unit in ${batchUnits[@]}
+	do
+		# Get the rent period
+		periodLen="$(awk -F, -v unit="$unit" '$1 == unit {print $3}' $schedulePath)"
+
+		## Get the last "Send Next" date
+		# get the current paid thru date
+		paidthru="$(awk -F'\t' -v unit="$unit" '$1 == unit {print $246}' "${directoryPath}")"
+
+		# Get the number of months in advance to send
+		advLen="$(awk -F, -v unit="$unit" '$1 == unit {print $7}' $schedulePath)"
+
+		# add the period invoiced for and subtract the number of months in advance to send
+		dateAdj=$(($periodLen + $advLen))
+
+		# Generate the date to send next invoice
+		sendnext="$(date -d "${paidthru} +$dateAdj month" +"%m/%Y")"
+
+		# Update the record
+		[[ -z $flag_test ]] && awk 'BEGIN{FS=OFS=","} {if($1==unit) {$6=var}; print $0;}' unit="$unit" var="$sendnext"  $schedulePath > $tmpSchedulePath && mv -f $tmpSchedulePath $schedulePath
+	done
+}
+
+
+# OPTION PARSING
+for flag in ${flag[@]}
+do
+	case $flag in
+		-L|--list-all) list && exit 0 || exit 1;;
+		-l|--list-batch) list_batch && exit 0|| exit 1;;
+		-u|--update) flag_update="true";;
+		-a|--add-account) flag_addAccount=true;;
+		-e|-edit-account) flag_editAccount=true;;
+		-r|-remove-account) flag_removeAccount=true;;
+		-p|--set-period) flag_period=true;;
+		-d|--set-delivery-method) flag_delivery=true;;
+		-n|--set-note) flag_note=true;;
+		-D|--set-delivery-advance) flag_advance=true;;
+		-t|--test) flag_test="true";;
+		-f|--force) flag_force="true";;
+		-m|--make) flag_make="true";;
+		-v|--verbose) flag_verbose="true";;
+		-h|--help) man bob && exit 0;;
+		*) echo "Unexpected option error: $flag" && exit 1;;
+	esac
+done
+
+[[ $flag_update ]] && update && exit 0
+[[ $flag_make ]] && make_invoices && exit 0
+[[ $aArg ]] && add_account && exit 0
+[[ $rArg ]] && remove_account && exit 0
+[[ $eArg ]] && edit_account && exit 0
