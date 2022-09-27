@@ -1,10 +1,10 @@
 #!/bin/zsh
 
 # REPORTS INPUT DIRECTORY
-inputDir="$HOME/invoices/reports"
+inputDir="$HOME/.local/share/bob/inputdir" # create a symlink here to point to desired directory
 
 # OUTPUT DIRECTORY
-outputDir="$HOME/invoices"
+outputDir="$HOME/.local/share/bob/outputdir" # create a symlink here to point to desired directory
 
 # SOURCES
 reportsDir=$HOME/.local/share/bob/reports
@@ -12,11 +12,11 @@ groffDir=$HOME/.local/share/bob/groff
 tmpSchedulePath="${reportsDir}/schedule.tmp"
 schedulePath="${reportsDir}/schedule.txt"
 directoryPath="${reportsDir}/Bronson Mini Storage - Directory.txt"
-prepayPath="${reportsDir}/Bronson Mini Storage - Prepaid Rent Liabilities"
+prepayPath="${reportsDir}/Bronson Mini Storage - Prepaid Rent Liabilities.txt"
 
 
 # OPTIONS
-zparseopts -E -D -F -A opts \
+zparseopts -E -D -A opts \
 	e+:=eArg -edit-account+:=eArg \
 	a+:=aArg -add-account+:=aArg \
 	r+:=rArg -remove-account+:=rArg \
@@ -38,9 +38,13 @@ args=($argv)
 
 # COLUMNATE
 columnate() {
-	column -t -s',' -N"Unit,Name,Period,Delivery,Last Sent,Send Next,Advance,TenantID,Note"
+	column -t -s',' # -N"Unit,Name,Period,Delivery,Last Sent,Send Next,Advance,TenantID,Note"
 }
 
+export_schedule()
+{
+	cp $schedulePath $outputDir/schedule.txt
+}
 
 # UPDATE
 update()
@@ -48,13 +52,10 @@ update()
 	prepayReport="Bronson Mini Storage - Prepaid Rent Liabilities.txt"
 	directoryReport="Bronson Mini Storage - Directory.txt"
 
-	## check if reports are present
-	#[[ $(ls $inputDir | wc -l) -eq 0 ]] && echo "No reports were found in $inputDir. Please export the \"Directory\" and \"Prepaid Rent Liabilities\" reports from SiteLink as .txt files into the $inputDir folder with the default filenames \"$directoryReport\" and \"$prepayReport\", respectively." && exit 1
-	#[[ -z $(grep $directoryReport $inputDir) ]] && echo "Unable to source $inputDir/$directoryReport. Please export the \"Directory\" report from SiteLink as a .txt file into the $inputDir folder with the default filename \"$directoryReport\"." && exit 1
-	#[[ -z $(grep $prepayReport $inputDir) ]] && echo "Unable to source $inputDir/$prepayReport. Please export the \"Prepaid Rent Liabilities\" report from SiteLink as a .txt file into the $inputDir folder with the default filename \"$prepayReport\"." && exit 1
-
-	#mv -f $inputDir/* $reportsDir	
-	#dos2unix $directoryPath $prepayPath 2> /dev/null && echo "Successfully converted SiteLink Reports' line ends from DOS to unix" || echo "Unable to update reports"
+	[[ $(ls $inputDir/$directoryReport) ]] && mv -f $inputDir/$directoryReport $reportsDir 2>/dev/null || echo "Updated directory report not found."	
+	[[ $(ls $inputDir/$prepayReport) ]] && mv -f $inputDir/$directoryReport $reportsDir 2>/dev/null || echo "Updated directory report not found."
+	cp $outputDir/schedule.txt $schedulePath
+	dos2unix $directoryPath $prepayPath $schedulePath && echo "Successfully converted SiteLink Reports' line ends from DOS to unix" || echo "Unable to update reports"
 
 	# validate schedule
 	scheduleUnits=($(awk -F, '{print $1}' $schedulePath))
@@ -145,7 +146,11 @@ add_account()
 	pArg=("${(@)pArg:#--set-period}")
 	dArg=("${(@)dArg:#--set-delivery-method}")
 	DArg=("${(@)DArg:#--set-delivery-advance}") nArg=("${(@)nArg:#--set-note}")
-
+	
+	# validate unit
+	unitnum="$(awk -F'\t' -v unit="$aArg" '$1 == unit {print $1}' "${directoryPath}")"
+	[[ -z $unitnum ]] && echo "Unit $aArg is either unrented or does not exist." && exit 1
+	
 	# check period values
 	case $pArg in
 		1) echo "Please use SiteLink's built in invoicing for single months." && exit 1;;
@@ -176,9 +181,6 @@ add_account()
 		*) [[ $DArg ]] && [[ $DArg -lt 0 || $DArg -gt 12 ]] && echo "Value for delivery advance is out of range." && exit 1;;
 	esac
 
-	# validate unit
-	unitnum="$(awk -F'\t' -v unit="$aArg" '$1 == unit {print $1}' "${directoryPath}")"
-	[[ -z $unitnum ]] && echo "Unit $aArg is either unrented or does not exist." && exit 1
 
 	# Source data
 	lastname="$(awk -F'\t' -v unit="$unitnum" '$1 == unit {print $12}' "${directoryPath}")"
@@ -223,6 +225,7 @@ add_account()
 
 		# confimation message
 		[[ $flag_verbose ]] && printf "%s\n\n" "Record successfully created." && bob -L $unitnum
+		export_schedule
 		exit 0
 	fi
 }
@@ -287,6 +290,7 @@ remove_account()
 	# remove empty lines, if any
 	sed -i '/^$/d' $schedulePath
 
+	export_schedule
 	exit 0
 }
 
@@ -376,6 +380,7 @@ edit_account()
 		# note
 		[[ $nArg ]] && awk 'BEGIN{FS=OFS=","} {if($1==unit) {$9=var}; print $0;}' unit="$unit" var="$nArg"  $schedulePath > $tmpSchedulePath && mv -f $tmpSchedulePath $schedulePath
 	fi
+	export_schedule
 }
 
 
@@ -394,7 +399,7 @@ make_invoices()
 	do
 	done
 
-	outputDir="$outputDir/$(date '+%Y')/$(date '+%m')_$(date '+%B')"
+	outputDir="$outputDir/sent/$(date '+%Y')/$(date '+%m')_$(date '+%B')"
 
 	# compile each groff document
 	for file in $(ls ${XDG_DATA_HOME:-$HOME/.local/share}/bob/groff)
